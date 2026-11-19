@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blood Bank Management System</title>
+<style>
+  [hidden] { display: none !important; }
+  body { font-family: Arial, sans-serif; margin: 0; background: #f4f4f6; color: #222; }
+  header { background: #b71c1c; color: #fff; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  header h1 { margin: 0; font-size: 20px; }
+  nav { background: #fff; padding: 6px 12px; display: flex; flex-wrap: wrap; gap: 4px; box-shadow: 0 1px 4px #0002; }
+  nav button { background: #eee; color: #333; }
+  nav button.on { background: #b71c1c; color: #fff; }
+  main { max-width: 1100px; margin: 16px auto; padding: 0 10px; }
+  section { background: #fff; border-radius: 8px; padding: 14px; margin-bottom: 16px; box-shadow: 0 1px 4px #0002; }
+  h2 { margin: 0 0 8px; color: #b71c1c; font-size: 17px; }
+  input, select, button { padding: 8px; margin: 3px 3px 3px 0; font-size: 14px; }
+  button { background: #b71c1c; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+  button.s { padding: 4px 8px; font-size: 12px; }
+  button.b { background: #1565c0; } button.g { background: #666; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
+  th, td { border-bottom: 1px solid #ddd; padding: 6px; text-align: left; }
+  th { background: #fafafa; }
+  .scroll { overflow-x: auto; }
+  .ok { color: #2e7d32; font-weight: bold; } .no { color: #d32f2f; font-weight: bold; }
+  .note { color: #666; font-size: 12px; }
+  .tag { padding: 2px 8px; border-radius: 10px; color: #fff; font-size: 12px; }
+  .p1 { background: #d32f2f; } .p2 { background: #f57c00; } .p3 { background: #388e3c; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .card { background: #fff; padding: 14px; border-radius: 8px; box-shadow: 0 1px 4px #0002; font-size: 13px; }
+  .num { font-size: 28px; font-weight: bold; color: #b71c1c; }
+  .alert { padding: 8px 10px; border-radius: 4px; margin: 4px 0; font-size: 14px; }
+  .alert.danger { background: #ffebee; color: #b71c1c; } .alert.warn { background: #fff3e0; color: #e65100; } .alert.good { background: #e8f5e9; color: #2e7d32; }
+  .barrow { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 13px; }
+  .bl { width: 60px; } .bar { flex: 1; background: #eee; height: 14px; border-radius: 7px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: #1565c0; }
+  #toast { position: fixed; top: 10px; right: 10px; padding: 10px 14px; border-radius: 6px; color: #fff; max-width: 320px; z-index: 20; }
+  #modal { position: fixed; inset: 0; background: #0006; display: flex; align-items: center; justify-content: center; z-index: 10; }
+  #mbox { background: #fff; padding: 16px; border-radius: 8px; max-width: 700px; width: 92%; max-height: 80vh; overflow: auto; }
+  #login { max-width: 320px; margin: 80px auto; background: #fff; padding: 24px; border-radius: 8px; box-shadow: 0 1px 6px #0003; text-align: center; }
+  #login input { width: 90%; }
+  @media print { header, nav, button { display: none !important; } }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h2>🩸 Blood Bank Login</h2>
+  <input id="lu" placeholder="Username"><br>
+  <input id="lp" type="password" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()"><br>
+  <button onclick="doLogin()">Login</button>
+  <p id="lerr" class="no"></p>
+  <p class="note">Demo: admin / admin123 &nbsp; or &nbsp; staff / staff123</p>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <h1>🩸 Blood Bank Management System</h1>
+    <div><span id="who"></span>
+      <button class="g s" onclick="changePw()">Change password</button>
+      <button class="g s" onclick="doLogout()">Logout</button></div>
+  </header>
+  <nav id="nav"></nav>
+  <main id="page"></main>
+</div>
+
+<div id="toast" hidden></div>
+<div id="modal" hidden onclick="this.hidden=true"><div id="mbox" onclick="event.stopPropagation()"></div></div>
+
+<script>
+const GROUPS = ['A+','A-','B+','B-','AB+','AB-','O+','O-'];
+const COMPONENTS = ['Whole Blood','RBC','Platelets','Plasma'];
+const COMPAT = {
+  'A+':['A+','A-','O+','O-'],'A-':['A-','O-'],'B+':['B+','B-','O+','O-'],'B-':['B-','O-'],
+  'AB+':['A+','A-','B+','B-','AB+','AB-','O+','O-'],'AB-':['A-','B-','AB-','O-'],'O+':['O+','O-'],'O-':['O-']
+};
+const PN = { 1: 'Emergency', 2: 'Urgent', 3: 'Normal' };
+let token = localStorage.getItem('bb_token'), me = null, current = 'dashboard', donorCache = [];
+
+// ---------- helpers ----------
+const $ = id => document.getElementById(id);
+const v = id => $(id).value;
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const opts = (arr, sel) => arr.map(x => `<option ${x === sel ? 'selected' : ''}>${x}</option>`).join('');
+const table = (h, rows) => `<div class="scroll"><table><tr>${h.map(x => `<th>${x}</th>`).join('')}</tr>${
+  rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${h.length}">No data</td></tr>`}</table></div>`;
+const bar = (label, n, max, red) => `<div class="barrow"><span class="bl">${label}</span><div class="bar"><i style="width:${n / max * 100}%;${red ? 'background:#d32f2f' : ''}"></i></div><b>${n}</b></div>`;
+
+function toast(text, bad) {
+  const t = $('toast'); t.textContent = text; t.style.background = bad ? '#c62828' : '#2e7d32'; t.hidden = false;
+  clearTimeout(window._tt); window._tt = setTimeout(() => t.hidden = true, 4000);
+}
+function modal(html) {
+  $('mbox').innerHTML = `${html}<p><button onclick="$('modal').hidden=true">Close</button></p>`;
+  $('modal').hidden = false;
+}
+async function api(url, method = 'GET', body) {
+  const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json', 'x-token': token || '' }, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401 && token) { doLogout(); throw new Error('Session expired'); }
+  return r.json();
+}
+async function act(url, method, body, after) {
+  const r = await api(url, method, body);
+  toast(r.msg, !r.ok);
+  if (r.ok && after) after();
+  return r;
+}
+
+// ---------- login ----------
+async function doLogin() {
+  const r = await api('/api/login', 'POST', { username: v('lu'), password: v('lp') });
+  if (!r.ok) { $('lerr').textContent = r.msg; return; }
+  token = r.token; localStorage.setItem('bb_token', token); me = r.user; start();
+}
+function start() {
+  $('login').hidden = true; $('app').hidden = false;
+  $('who').textContent = `${me.fullname || me.username} (${me.role})`;
+  go('dashboard');
+}
+function doLogout() {
+  if (token) fetch('/api/logout', { method: 'POST', headers: { 'x-token': token } });
+  token = null; me = null; localStorage.removeItem('bb_token');
+  $('app').hidden = true; $('login').hidden = false; $('lp').value = '';
+}
+function changePw() {
+  const o = prompt('Old password'); if (o === null) return;
+  const n = prompt('New password (min 4 characters)'); if (n === null) return;
+  act('/api/password', 'POST', { oldPassword: o, newPassword: n });
+}
+
+// ---------- navigation ----------
+const PAGES = {
+  dashboard: { label: 'Dashboard', fn: pDashboard },
+  donors: { label: 'Donors', fn: pDonors },
+  finder: { label: 'Donor Finder', fn: pFinder },
+  stock: { label: 'Blood Stock', fn: pStock },
+  requests: { label: 'Requests', fn: pRequests },
+  hospitals: { label: 'Hospitals', fn: pHospitals },
+  camps: { label: 'Blood Camps', fn: pCamps },
+  reports: { label: 'Reports', fn: pReports },
+  users: { label: 'Users', fn: pUsers, admin: true },
+  logs: { label: 'Activity Log', fn: pLogs, admin: true },
+};
+function go(p) { current = p; buildNav(); PAGES[p].fn(); }
+function buildNav() {
+  $('nav').innerHTML = Object.entries(PAGES).filter(([k, x]) => !x.admin || me.role === 'admin')
+    .map(([k, x]) => `<button class="${k === current ? 'on' : ''}" onclick="go('${k}')">${x.label}</button>`).join('');
+}
+
+// ---------- DASHBOARD ----------
+async function pDashboard() {
+  const d = await api('/api/dashboard'), t = d.totals;
+  const max = Math.max(1, ...d.byGroup.map(b => b.count)), mmax = Math.max(1, ...d.monthly.map(m => m.count));
+  $('page').innerHTML = `
+  <div class="cards">${[['Total donors', t.donors], ['Bags available', t.available], ['Pending requests', t.pending],
+    ['Fulfilled requests', t.fulfilled], ['Expiring in 7 days', t.expiringSoon], ['Upcoming camps', t.camps]]
+    .map(([a, b]) => `<div class="card"><div class="num">${b}</div>${a}</div>`).join('')}</div>
+  <section><h2>Alerts</h2>${d.alerts.length ? d.alerts.map(a => `<div class="alert ${a.level}">${esc(a.text)}</div>`).join('') : '<div class="alert good">No alerts. Everything looks fine.</div>'}</section>
+  <section><h2>Stock by blood group</h2>${d.byGroup.map(b => bar(b.group, b.count, max, b.count <= 5)).join('')}</section>
+  <section><h2>Donations (last 6 months)</h2>${d.monthly.map(m => bar(m.month, m.count, mmax)).join('')}</section>
+  <section><h2>Recent activity</h2>${table(['Time', 'User', 'Action'], d.logs.map(l => [l.time, esc(l.username), esc(l.action)]))}</section>`;
+}
+
+// ---------- DONORS ----------
+function pDonors() {
+  $('page').innerHTML = `
+  <section><h2>Add donor</h2>
+    <input id="dName" placeholder="Name"><select id="dGroup">${opts(GROUPS)}</select>
+    <input id="dPhone" placeholder="Phone"><input id="dCity" placeholder="City">
+    <select id="dGender">${opts(['Male', 'Female', 'Other'])}</select>
+    <label>DOB <input id="dDob" type="date"></label>
+    <input id="dWeight" type="number" placeholder="Weight kg" style="width:110px">
+    <button onclick="addDonor()">Add donor</button></section>
+  <section id="donatePanel" hidden></section>
+  <section><h2>Donors</h2>
+    <input id="fq" placeholder="Search name / phone" oninput="loadDonors()">
+    <select id="fg" onchange="loadDonors()"><option value="">All groups</option>${opts(GROUPS)}</select>
+    <input id="fc" placeholder="City" oninput="loadDonors()">
+    <div id="donorList"></div></section>`;
+  loadDonors();
+}
+async function loadDonors() {
+  const q = new URLSearchParams({ q: v('fq'), group: v('fg'), city: v('fc') });
+  donorCache = await api('/api/donors?' + q);
+  $('donorList').innerHTML = table(
+    ['Name', 'Group', 'Phone', 'City', 'Age', 'Donations', 'Last donation', 'Eligible', 'Actions'],
+    donorCache.map(d => [esc(d.name), `<b>${d.blood_group}</b>`, esc(d.phone), esc(d.city), d.age ?? '-', d.total_donations,
+      d.last_donation || '-', d.eligible ? '<span class="ok">Yes</span>' : '<span class="no">No</span>',
+      `<button class="s" onclick="openDonate(${d.id})">Donate</button>
+       <button class="s b" onclick="donorHistory(${d.id})">History</button>
+       <button class="s g" onclick="editDonor(${d.id})">Edit</button>
+       ${me.role === 'admin' ? `<button class="s" onclick="delDonor(${d.id})">Delete</button>` : ''}`]));
+}
+function addDonor() {
+  act('/api/donors', 'POST', { name: v('dName'), blood_group: v('dGroup'), phone: v('dPhone'), city: v('dCity'),
+    gender: v('dGender'), dob: v('dDob'), weight: v('dWeight') }, () => { $('dName').value = ''; loadDonors(); });
+}
+function openDonate(id) {
+  const d = donorCache.find(x => x.id === id), p = $('donatePanel');
+  p.hidden = false;
+  p.innerHTML = `<h2>Donation screening: ${esc(d.name)} (${d.blood_group})</h2>
+    <input id="gHb" type="number" step="0.1" placeholder="Hemoglobin g/dL">
+    <input id="gW" type="number" value="${d.weight || ''}" placeholder="Weight kg">
+    <input id="gBp" placeholder="BP e.g. 120/80"><select id="gComp">${opts(COMPONENTS)}</select>
+    <button onclick="submitDonate(${id})">Record donation</button>
+    <button class="g" onclick="$('donatePanel').hidden=true">Cancel</button>
+    <p class="note">Rules: age 18-65, weight at least 50 kg, hemoglobin at least 12.5 g/dL, 90 days gap between donations.</p>`;
+  p.scrollIntoView();
+}
+function submitDonate(id) {
+  act('/api/donors/' + id + '/donate', 'POST', { hemoglobin: v('gHb'), weight: v('gW'), bp: v('gBp'), component: v('gComp') },
+    () => { $('donatePanel').hidden = true; loadDonors(); });
+}
+async function donorHistory(id) {
+  const h = await api('/api/donors/' + id + '/history'), d = donorCache.find(x => x.id === id);
+  modal(`<h2>Donation history: ${esc(d.name)}</h2>` + table(['Date', 'Component', 'Hb', 'Weight', 'BP', 'Result', 'Reason'],
+    h.map(x => [x.date, x.component, x.hemoglobin ?? '-', x.weight ?? '-', esc(x.bp), x.result === 'accepted' ? '<span class="ok">accepted</span>' : '<span class="no">deferred</span>', esc(x.reason)])));
+}
+function editDonor(id) {
+  const d = donorCache.find(x => x.id === id);
+  const name = prompt('Name', d.name); if (name === null) return;
+  const phone = prompt('Phone', d.phone); if (phone === null) return;
+  const city = prompt('City', d.city); if (city === null) return;
+  act('/api/donors/' + id, 'PUT', { name, phone, city }, loadDonors);
+}
+function delDonor(id) { if (confirm('Delete this donor?')) act('/api/donors/' + id, 'DELETE', null, loadDonors); }
+
+// ---------- DONOR FINDER ----------
+function pFinder() {
+  $('page').innerHTML = `
+  <section><h2>Emergency donor finder</h2>
+    <p class="note">Find eligible donors (90 day gap passed) who can give blood to a patient.</p>
+    <select id="xg">${opts(GROUPS)}</select><input id="xc" placeholder="City (optional)">
+    <button onclick="findDonors()">Find donors</button><div id="xr"></div></section>
+  <section><h2>Blood compatibility chart</h2>${table(['Patient group', 'Can receive from'], GROUPS.map(g => [`<b>${g}</b>`, COMPAT[g].join(', ')]))}</section>`;
+}
+async function findDonors() {
+  const r = await api('/api/finder?group=' + encodeURIComponent(v('xg')) + '&city=' + encodeURIComponent(v('xc')));
+  $('xr').innerHTML = Array.isArray(r) ? table(['Name', 'Group', 'Phone', 'City', 'Last donation'],
+    r.map(d => [esc(d.name), `<b>${d.blood_group}</b>`, esc(d.phone), esc(d.city), d.last_donation || '-'])) : esc(r.msg);
+}
+
+// ---------- STOCK ----------
+function pStock() {
+  $('page').innerHTML = `
+  <section><h2>Stock overview (available bags)</h2><div id="sum"></div></section>
+  <section><h2>Add bags</h2>
+    <select id="aG">${opts(GROUPS)}</select><select id="aC">${opts(COMPONENTS)}</select>
+    <input id="aU" type="number" min="1" value="1" style="width:80px"><button onclick="addStock()">Add</button>
+    <p class="note">Shelf life: Whole Blood 35 days, RBC 42, Platelets 5, Plasma 365.</p></section>
+  <section><h2>Bags</h2>
+    <select id="lS" onchange="loadStock()">${opts(['available', 'used', 'expired', 'discarded', 'all'])}</select>
+    <select id="lG" onchange="loadStock()"><option value="">All groups</option>${opts(GROUPS)}</select>
+    <select id="lC" onchange="loadStock()"><option value="">All components</option>${opts(COMPONENTS)}</select>
+    <div id="bags"></div></section>`;
+  loadStock();
+}
+async function loadStock() {
+  const s = await api('/api/stock/summary');
+  const n = (g, c) => (s.find(x => x.blood_group === g && x.component === c) || { n: 0 }).n;
+  $('sum').innerHTML = table(['Group', ...COMPONENTS, 'Total'], GROUPS.map(g => {
+    const row = COMPONENTS.map(c => n(g, c)), tot = row.reduce((a, b) => a + b, 0);
+    return [`<b>${g}</b>`, ...row, `<b class="${tot <= 5 ? 'no' : ''}">${tot}</b>`];
+  }));
+  const q = new URLSearchParams({ status: v('lS'), group: v('lG'), component: v('lC') });
+  const bags = await api('/api/stock?' + q);
+  $('bags').innerHTML = table(['Bag', 'Group', 'Component', 'Collected', 'Expiry', 'Days left', 'Status', ''],
+    bags.map(b => {
+      const left = Math.ceil((new Date(b.expiry) - new Date()) / 864e5);
+      return ['BAG-' + b.id, `<b>${b.blood_group}</b>`, b.component, b.collected, b.expiry,
+        `<span class="${left <= 3 ? 'no' : ''}">${left}</span>`, b.status + (b.note ? ` (${esc(b.note)})` : ''),
+        ['available', 'expired'].includes(b.status) ? `<button class="s" onclick="discard(${b.id})">Discard</button>` : ''];
+    }));
+}
+function addStock() { act('/api/stock', 'POST', { blood_group: v('aG'), component: v('aC'), units: v('aU') }, loadStock); }
+function discard(id) {
+  const reason = prompt('Reason for discarding (damaged, contaminated, expired...)');
+  if (reason === null) return;
+  act('/api/stock/' + id + '/discard', 'POST', { reason }, loadStock);
+}
+
+// ---------- REQUESTS ----------
+async function pRequests() {
+  const hs = await api('/api/hospitals');
+  $('page').innerHTML = `
+  <section><h2>New blood request</h2>
+    <input id="qP" placeholder="Patient name"><select id="qG">${opts(GROUPS)}</select>
+    <select id="qC">${opts(COMPONENTS)}</select>
+    <input id="qU" type="number" min="1" value="1" style="width:80px">
+    <select id="qPr"><option value="1">1 - Emergency</option><option value="2">2 - Urgent</option><option value="3" selected>3 - Normal</option></select>
+    <input id="qH" list="hl" placeholder="Hospital"><datalist id="hl">${hs.map(h => `<option>${esc(h.name)}</option>`).join('')}</datalist>
+    <input id="qD" placeholder="Doctor"><input id="qCt" placeholder="Contact phone">
+    <button onclick="addRequest()">Submit request</button></section>
+  <section><h2>Priority queue</h2>
+    <button class="b" onclick="processNext()">▶ Process next</button>
+    <button class="b" onclick="processAll()">⏩ Process all</button>
+    <select id="rS" onchange="loadRequests()">${opts(['pending', 'fulfilled', 'rejected', 'cancelled', 'all'])}</select>
+    <div id="reqs"></div></section>`;
+  loadRequests();
+}
+async function loadRequests() {
+  const rows = await api('/api/requests?status=' + v('rS'));
+  $('reqs').innerHTML = table(['#', 'Patient', 'Group', 'Component', 'Units', 'Priority', 'Hospital / Doctor', 'Status', 'Issued bags', ''],
+    rows.map(r => [r.id, esc(r.patient), `<b>${r.blood_group}</b>`, r.component, r.units,
+      `<span class="tag p${r.priority}">${PN[r.priority]}</span>`, esc(r.hospital) + (r.doctor ? ' / ' + esc(r.doctor) : ''),
+      `<span class="${r.status === 'fulfilled' ? 'ok' : ''}">${r.status}</span>`, esc(r.issued_bags),
+      r.status === 'pending' ? `<button class="s g" onclick="reqAct(${r.id},'reject')">Reject</button> <button class="s g" onclick="reqAct(${r.id},'cancel')">Cancel</button>` : '']));
+}
+function addRequest() {
+  act('/api/requests', 'POST', { patient: v('qP'), blood_group: v('qG'), component: v('qC'), units: v('qU'), priority: v('qPr'),
+    hospital: v('qH'), doctor: v('qD'), contact: v('qCt') }, () => { $('qP').value = ''; loadRequests(); });
+}
+function processNext() { act('/api/requests/process', 'POST', null, loadRequests).then(r => { if (!r.ok) loadRequests(); }); }
+function processAll() { act('/api/requests/process-all', 'POST', null, loadRequests); }
+function reqAct(id, a) { act(`/api/requests/${id}/${a}`, 'POST', null, loadRequests); }
+
+// ---------- HOSPITALS ----------
+function pHospitals() {
+  $('page').innerHTML = `
+  <section><h2>Add hospital</h2><input id="hN" placeholder="Hospital name"><input id="hC" placeholder="City"><input id="hP" placeholder="Phone">
+    <button onclick="addHospital()">Add</button></section>
+  <section><h2>Hospitals</h2><div id="hl2"></div></section>`;
+  loadHospitals();
+}
+async function loadHospitals() {
+  const rows = await api('/api/hospitals');
+  $('hl2').innerHTML = table(['Name', 'City', 'Phone', ''], rows.map(h => [esc(h.name), esc(h.city), esc(h.phone),
+    me.role === 'admin' ? `<button class="s" onclick="delHospital(${h.id})">Delete</button>` : '']));
+}
+function addHospital() { act('/api/hospitals', 'POST', { name: v('hN'), city: v('hC'), phone: v('hP') }, () => { $('hN').value = ''; loadHospitals(); }); }
+function delHospital(id) { if (confirm('Delete hospital?')) act('/api/hospitals/' + id, 'DELETE', null, loadHospitals); }
+
+// ---------- CAMPS ----------
+function pCamps() {
+  $('page').innerHTML = `
+  <section><h2>Plan blood donation camp</h2><input id="cT" placeholder="Camp title"><input id="cL" placeholder="Location">
+    <input id="cD" type="date"><input id="cE" type="number" placeholder="Expected donors" style="width:140px">
+    <button onclick="addCamp()">Create</button></section>
+  <section><h2>Camps</h2><div id="cl"></div></section>`;
+  loadCamps();
+}
+async function loadCamps() {
+  const rows = await api('/api/camps');
+  $('cl').innerHTML = table(['Title', 'Location', 'Date', 'Expected', 'Collected', 'Status', ''], rows.map(c => [esc(c.title), esc(c.location), c.date,
+    c.expected, c.collected, c.status,
+    (c.status === 'upcoming' ? `<button class="s b" onclick="doneCamp(${c.id})">Complete</button> ` : '') +
+    (me.role === 'admin' ? `<button class="s" onclick="delCamp(${c.id})">Delete</button>` : '')]));
+}
+function addCamp() { act('/api/camps', 'POST', { title: v('cT'), location: v('cL'), date: v('cD'), expected: v('cE') }, () => { $('cT').value = ''; loadCamps(); }); }
+function doneCamp(id) {
+  const n = prompt('How many donors came / bags collected?'); if (n === null) return;
+  act(`/api/camps/${id}/complete`, 'POST', { collected: n }, loadCamps);
+}
+function delCamp(id) { if (confirm('Delete camp?')) act('/api/camps/' + id, 'DELETE', null, loadCamps); }
+
+// ---------- REPORTS ----------
+function pReports() {
+  $('page').innerHTML = `
+  <section><h2>Download CSV reports (open in Excel)</h2>
+    ${['donors', 'donations', 'stock', 'requests', 'camps'].map(t => `<button onclick="exportCsv('${t}')">${t}.csv</button>`).join(' ')}</section>
+  <section><h2>Print</h2><button onclick="window.print()">Print this page / Save as PDF</button></section>`;
+}
+async function exportCsv(t) {
+  const r = await fetch('/api/export/' + t, { headers: { 'x-token': token } });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(await r.blob()); a.download = t + '.csv'; a.click();
+}
+
+// ---------- USERS (admin) ----------
+function pUsers() {
+  $('page').innerHTML = `
+  <section><h2>Add user</h2><input id="uU" placeholder="Username"><input id="uF" placeholder="Full name">
+    <input id="uP" type="password" placeholder="Password"><select id="uR">${opts(['staff', 'admin'])}</select>
+    <button onclick="addUserBtn()">Add user</button></section>
+  <section><h2>Users</h2><div id="ul"></div></section>`;
+  loadUsers();
+}
+async function loadUsers() {
+  const rows = await api('/api/users');
+  $('ul').innerHTML = table(['Username', 'Full name', 'Role', ''], rows.map(u => [esc(u.username), esc(u.fullname), u.role,
+    `<button class="s" onclick="delUser(${u.id})">Delete</button>`]));
+}
+function addUserBtn() { act('/api/users', 'POST', { username: v('uU'), fullname: v('uF'), password: v('uP'), role: v('uR') }, () => { $('uU').value = ''; $('uP').value = ''; loadUsers(); }); }
+function delUser(id) { if (confirm('Delete user?')) act('/api/users/' + id, 'DELETE', null, loadUsers); }
+
+// ---------- ACTIVITY LOG (admin) ----------
+async function pLogs() {
+  const rows = await api('/api/logs');
+  $('page').innerHTML = `<section><h2>Activity log (last 200)</h2>${table(['Time', 'User', 'Action'], rows.map(l => [l.time, esc(l.username), esc(l.action)]))}</section>`;
+}
+
+// ---------- auto login if token saved ----------
+(async () => {
+  if (!token) return;
+  try { const u = await api('/api/me'); if (u && u.id) { me = u; start(); } } catch (e) {}
+})();
+</script>
+</body>
+</html>
